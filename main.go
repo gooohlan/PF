@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -40,11 +41,9 @@ var catalog []*Catalog
 var MaxNum int
 
 func main() {
-	// 通过命令行输入获取漫画id
-	if len(os.Args) < 2 {
-		log.Println("请输入Id")
-	}
-	Mid, err := strconv.Atoi(os.Args[1])
+	var Mid int
+	fmt.Println("请输入漫画Id：")
+	_, err := fmt.Scanln(&Mid)
 	if err != nil {
 		log.Println("漫画ID格式错误")
 		panic(err)
