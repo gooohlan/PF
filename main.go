@@ -1,27 +1,21 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/robertkrimen/otto"
+
 	"github.com/axgle/mahonia"
 	"github.com/gocolly/colly"
-	"github.com/robertkrimen/otto"
-	"golang.org/x/net/html/charset"
-	"golang.org/x/text/encoding"
-	"golang.org/x/text/encoding/unicode"
-	"golang.org/x/text/transform"
 )
 
 const (
@@ -32,9 +26,8 @@ const (
 )
 
 // 访问漫画首页,获取目录
-// 通过目录链接获取该目录下所有图片地址,
-// 通过图片地址,获取所有的图片
-// 存入对应文件夹
+// 通过目录链接获取该目录下所有图片地址
+// 通过图片地址,获取所有的图片,存入对应文件夹
 
 // 漫画目录
 type Catalog struct {
@@ -47,23 +40,22 @@ var catalog []*Catalog
 var MaxNum int
 
 func main() {
-	//if len(os.Args) < 2 {
-	//	log.Println("请输入Id")
-	//}
-	//Mid, err := strconv.Atoi(os.Args[1])
-	//if err != nil {
-	//	log.Println("漫画ID格式错误")
-	//	panic(err)
-	//}
-	Mid := 419
-	// 目标漫画对应Id
+	// 通过命令行输入获取漫画id
+	if len(os.Args) < 2 {
+		log.Println("请输入Id")
+	}
+	Mid, err := strconv.Atoi(os.Args[1])
+	if err != nil {
+		log.Println("漫画ID格式错误")
+		panic(err)
+	}
+
 	c := colly.NewCollector()
 	c.OnHTML("#play_0", func(e *colly.HTMLElement) {
 		e.ForEach("ul li a", func(i int, element *colly.HTMLElement) {
 			href := element.Attr("href")
 			title := element.Text
-			//title = iconv.ConvertString(title, "GB2312", "utf-8")
-			title = coverGBKToUTF8(title)
+			title = coverGBKToUTF8(title) // 页面编码转为UTF8
 			catalog = append(catalog, &Catalog{Url: PF + href, Title: title})
 		})
 	})
@@ -73,75 +65,79 @@ func main() {
 
 	c.Visit(MANHUA + strconv.Itoa(Mid))
 
-	var wg sync.WaitGroup
-
+	pool := New(300)
+	log.Println(len(catalog))
 	for k, v := range catalog {
-		wg.Add(1)
+		pool.Add(1)
 		go func(v *Catalog, k int) {
-			//获取图片地址
 			GetImgArr(v)
-			if runtime.NumGoroutine() > MaxNum {
-				MaxNum = runtime.NumGoroutine()
-			}
-			//创建文件夹并获取图片
-			CreateFileGetImg(v, len(catalog)-k)
-			wg.Done()
+			pool.Done()
 		}(v, k)
 	}
+	pool.Wait()
+	time.Sleep(time.Second * 1)
+
+	log.Println("开始下载图片.....")
+	var wg sync.WaitGroup
+	var jobsChan = make(chan int, 15)
+	poolCount := 15
+	for i := 0; i < poolCount; i++ {
+		go func() {
+			for j := range jobsChan {
+				CreateFileGetImg(catalog[j], len(catalog)-j)
+				wg.Done()
+				time.Sleep(time.Microsecond * 500)
+			}
+		}()
+	}
+	for i := 0; i < len(catalog); i++ {
+		jobsChan <- i
+		wg.Add(1)
+		log.Println("开始下载章节:", catalog[i].Title, "共", len(catalog[i].ImgArr), "页")
+		if len(catalog[i].ImgArr) == 0 {
+			log.Println("图片目录为空..........")
+		}
+	}
+	wg.Wait()
 	time.Sleep(time.Second)
-	log.Println(MaxNum)
+	log.Println("下载完成")
 }
 
 // 获取该章节所有图片地址
 func GetImgArr(catalog *Catalog) {
-GETURL:
-	resp, err := http.Get(catalog.Url)
-	if err != nil {
-		log.Println("获取漫画子页面失败1:", err)
-		goto GETURL
-	}
-	bodyReader := bufio.NewReader(resp.Body)
-	e := determineEncoding(bodyReader)
-	utf8Reader := transform.NewReader(bodyReader, e.NewDecoder())
+	c := colly.NewCollector()
+	c.OnHTML("head script", func(e *colly.HTMLElement) {
+		if e.Text != "" {
+			JavaScript := coverGBKToUTF8(e.Text)
+			JavaScript += " function f() {return photosr;} f();"
+			vm := otto.New()
+			value, err := vm.Run(JavaScript)
+			if err != nil {
+				log.Println("解析图片地址失败:", err)
+			}
+			imgStr, err := value.ToString()
+			if err != nil {
+				log.Println("图片地址解析出错:", err)
+			}
+			imgArr := strings.Split(imgStr, ",")
+			catalog.ImgArr = imgArr[1:]
+			if len(catalog.ImgArr) == 0 {
+				log.Println("图片获取失败..............")
+			}
+		}
+	})
 
-	result, err := ioutil.ReadAll(utf8Reader)
-	if err != nil {
-		log.Println("解析页面失败", err)
-		//panic(err)
-	}
-	resp.Body.Close()
-	var r = regexp.MustCompile("fu[\\S\\W]+};")
-	JavaScript := r.FindString(string(result))
-	JavaScript += " function f() {return photosr;} f();"
-	vm := otto.New()
-	value, err := vm.Run(JavaScript)
-	if err != nil {
-		log.Println("解析图片地址失败:", err)
-		//panic(err)
-	}
-	imgStr, err := value.ToString()
-	if err != nil {
-		log.Println("图片地址解析出错:", err)
-		//panic(err)
-	}
-	imgArr := strings.Split(imgStr, ",")
-	catalog.ImgArr = imgArr[1:]
+	c.OnRequest(func(r *colly.Request) {
+	})
 
-}
-
-//编码统一为utf8
-func determineEncoding(r *bufio.Reader) (e encoding.Encoding) {
-	bytes, err := r.Peek(1024)
-	if err != nil {
-		return unicode.UTF8
-	}
-	e, _, _ = charset.DetermineEncoding(bytes, "")
-	return
+	c.Visit(catalog.Url)
 }
 
 // 创建文件夹并存储图片
 func CreateFileGetImg(catalog *Catalog, index int) {
-	if catalog.Title == "通知" {
+	// 创建文件目录
+	if len(catalog.ImgArr) == 0 {
+		log.Println(catalog.Title, "图片目录为空")
 		return
 	}
 	dir := DIR + strconv.Itoa(index) + "--" + catalog.Title
@@ -149,30 +145,56 @@ func CreateFileGetImg(catalog *Catalog, index int) {
 	if err != nil {
 		log.Println("创建文件夹失败")
 	}
-	var wg sync.WaitGroup
+
+	// 下载图片
 	for k, v := range catalog.ImgArr {
-		wg.Add(1)
-		go func(img string, k int) {
-			if runtime.NumGoroutine() > MaxNum {
-				MaxNum = runtime.NumGoroutine()
-			}
-		GETIMAGE:
-			resp, err := http.Get(ImgHeader + img)
-			if err != nil {
-				log.Println(err)
-				goto GETIMAGE
-			}
-			body, _ := ioutil.ReadAll(resp.Body)
-			out, _ := os.Create(dir + "/" + strconv.Itoa(k+1) + ".jpg")
-			io.Copy(out, bytes.NewReader(body))
-			resp.Body.Close()
-			wg.Done()
-		}(v, k)
+	GetImage:
+		resp, err := http.Get(ImgHeader + v)
+		if err != nil {
+			log.Println(err)
+			goto GetImage // 获取图片出错重新获取
+		}
+		body, _ := ioutil.ReadAll(resp.Body)
+		out, _ := os.Create(dir + "/" + strconv.Itoa(k+1) + ".jpg")
+		io.Copy(out, bytes.NewReader(body))
+		resp.Body.Close()
 	}
-	wg.Wait()
 }
 
 func coverGBKToUTF8(src string) string {
-	// 网上搜有说要调用translate函数的，实测不用
 	return mahonia.NewDecoder("gbk").ConvertString(src)
+}
+
+type pool struct {
+	queue chan int
+	wg    *sync.WaitGroup
+}
+
+func New(size int) *pool {
+	if size <= 0 {
+		size = 1
+	}
+	return &pool{
+		queue: make(chan int, size),
+		wg:    &sync.WaitGroup{},
+	}
+}
+
+func (p *pool) Add(delta int) {
+	for i := 0; i < delta; i++ {
+		p.queue <- 1
+	}
+	for i := 0; i > delta; i-- {
+		<-p.queue
+	}
+	p.wg.Add(delta)
+}
+
+func (p *pool) Done() {
+	<-p.queue
+	p.wg.Done()
+}
+
+func (p *pool) Wait() {
+	p.wg.Wait()
 }
