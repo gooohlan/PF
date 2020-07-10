@@ -37,8 +37,8 @@ type Catalog struct {
 	ImgArr []string
 }
 
-var catalog []*Catalog
-var MaxNum int
+var catalog []*Catalog // 漫画目录
+var Title string       // 漫画标题
 
 func main() {
 	var Mid int
@@ -58,6 +58,14 @@ func main() {
 			catalog = append(catalog, &Catalog{Url: PF + href, Title: title})
 		})
 	})
+	// 获取漫画标题,并创建目录
+	c.OnHTML(".titleInfo h1", func(element *colly.HTMLElement) {
+		Title = coverGBKToUTF8(element.Text)
+		err := os.MkdirAll(Title, os.ModePerm)
+		if err != nil {
+			log.Println("创建文件夹失败")
+		}
+	})
 
 	c.OnRequest(func(r *colly.Request) {
 	})
@@ -65,7 +73,6 @@ func main() {
 	c.Visit(MANHUA + strconv.Itoa(Mid))
 
 	pool := New(300)
-	log.Println(len(catalog))
 	for k, v := range catalog {
 		pool.Add(1)
 		go func(v *Catalog, k int) {
@@ -139,11 +146,12 @@ func CreateFileGetImg(catalog *Catalog, index int) {
 		log.Println(catalog.Title, "图片目录为空")
 		return
 	}
-	dir := DIR + strconv.Itoa(index) + "--" + catalog.Title
-	err := os.MkdirAll(dir, os.ModePerm)
-	if err != nil {
-		log.Println("创建文件夹失败")
-	}
+	//dir := Title + "/" + +"--" + catalog.Title
+	file := Title + "/" + strconv.Itoa(index) + "-"
+	//err := os.MkdirAll(dir, os.ModePerm)
+	//if err != nil {
+	//	log.Println("创建文件夹失败")
+	//}
 
 	// 下载图片
 	for k, v := range catalog.ImgArr {
@@ -154,7 +162,7 @@ func CreateFileGetImg(catalog *Catalog, index int) {
 			goto GetImage // 获取图片出错重新获取
 		}
 		body, _ := ioutil.ReadAll(resp.Body)
-		out, _ := os.Create(dir + "/" + strconv.Itoa(k+1) + ".jpg")
+		out, _ := os.Create(file + strconv.Itoa(k+1) + "--" + catalog.Title + ".jpg")
 		io.Copy(out, bytes.NewReader(body))
 		resp.Body.Close()
 	}
