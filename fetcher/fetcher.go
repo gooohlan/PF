@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"time"
 
 	"golang.org/x/net/html/charset"
 	"golang.org/x/text/encoding"
@@ -15,10 +16,10 @@ import (
 	"golang.org/x/text/transform"
 )
 
-// var Ticker = time.After(100 * time.Millisecond)
+var reteLimiter = time.Tick(100 * time.Millisecond)
 
 func Fetch(url string, types int) ([]byte, error) {
-	// <-Ticker
+	<-reteLimiter
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err

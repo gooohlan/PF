@@ -18,7 +18,7 @@ func ParseChapterList(contents []byte) engine.ParseResult {
 		result.Items = append(result.Items, "Chapter List "+string(m[2]))
 		result.Requests = append(result.Requests, engine.Request{
 			Url:    common.UrlJoin(engine.PFUrl, string(m[1])),
-			Parser: NewComicListParser(strconv.Itoa(i+1) + "." + string(m[2])),
+			Parser: NewComicListParser(strconv.Itoa(len(matches)-i) + "." + string(m[2])),
 		})
 	}
 	title := reTitle.FindAllSubmatch(contents, -1)
